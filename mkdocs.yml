@@ -1,0 +1,20 @@
+site_name: Financial Tweets Sentiment Analysis
+site_url: https://github.com/
+repo_url: https://github.com/
+nav:
+  - Home: index.md
+  - Datasets: datasets.md
+  - financial_tweets_sentiment_analysis:
+    - data: financial_tweets_sentiment_analysis/data.md
+    - models: financial_tweets_sentiment_analysis/models.md
+    - train: financial_tweets_sentiment_analysis/train.md
+    - tune: financial_tweets_sentiment_analysis/tune.md
+    - evaluate: financial_tweets_sentiment_analysis/evaluate.md
+    - predict: financial_tweets_sentiment_analysis/predict.md
+    - serve: financial_tweets_sentiment_analysis/serve.md
+    - utils: financial_tweets_sentiment_analysis/utils.md
+theme: readthedocs
+plugins:
+  - mkdocstrings
+watch:
+  - .  # reload docs for any file changes

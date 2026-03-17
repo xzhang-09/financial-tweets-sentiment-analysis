@@ -1,0 +1,110 @@
+name: serve
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  serve:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+
+      - name: Train baseline model for API smoke test
+        env:
+          PYTHONPATH: .
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          from financial_tweets_sentiment_analysis import train
+
+          train.train_model(
+              model_type="baseline",
+              dataset_loc="datasets/processed/train/train_sample_5000.csv",
+              num_samples=300,
+              run_name="ci-serve-run",
+              results_fp="results/ci_serve_train.json",
+          )
+          PY
+
+      - name: Start API server
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m financial_tweets_sentiment_analysis.serve --run-id ci-serve-run > serve.log 2>&1 &
+          echo $! > serve.pid
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/ > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Server did not start in time"
+          cat serve.log
+          exit 1
+
+      - name: Smoke test endpoints
+        run: |
+          python - <<'PY'
+          import json
+          from urllib import request
+
+          def post_json(url, payload):
+              data = json.dumps(payload).encode("utf-8")
+              req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
+              with request.urlopen(req) as response:
+                  return json.loads(response.read().decode("utf-8"))
+
+          with request.urlopen("http://127.0.0.1:8000/") as response:
+              health = json.loads(response.read().decode("utf-8"))
+          assert health["status"] == "ok"
+
+          prediction = post_json(
+              "http://127.0.0.1:8000/predict",
+              {"tweet": "$AAPL looks strong into earnings."},
+          )
+          assert "results" in prediction and len(prediction["results"]) == 1
+
+          batch_prediction = post_json(
+              "http://127.0.0.1:8000/predict-batch",
+              {"tweets": ["$TSLA looks weak today.", "Fed headlines are keeping markets flat."]},
+          )
+          assert "results" in batch_prediction and len(batch_prediction["results"]) == 2
+
+          evaluation = post_json(
+              "http://127.0.0.1:8000/evaluate",
+              {"dataset_loc": "datasets/processed/test/holdout_sample_1000.csv", "file_type": "csv"},
+          )
+          assert "overall" in evaluation and "per_class" in evaluation
+          PY
+
+      - name: Show server log on failure
+        if: failure()
+        run: |
+          if [ -f serve.log ]; then
+            cat serve.log
+          else
+            echo "serve.log not found"
+          fi
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f serve.pid ]; then
+            kill "$(cat serve.pid)" || true
+          fi

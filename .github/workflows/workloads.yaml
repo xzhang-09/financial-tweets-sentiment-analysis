@@ -1,0 +1,89 @@
+name: workloads
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  workloads:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest tests/code/test_data.py tests/code/test_predict.py tests/code/test_utils.py \
+            tests/data/test_dataset.py tests/code/test_train.py tests/code/test_tune.py \
+            tests/model/test_behavioral.py -q
+
+      - name: Train baseline workload
+        env:
+          PYTHONPATH: .
+        run: |
+          mkdir -p results
+          python - <<'PY'
+          from financial_tweets_sentiment_analysis import train
+
+          train.train_model(
+              model_type="baseline",
+              dataset_loc="datasets/processed/train/train_sample_5000.csv",
+              num_samples=500,
+              run_name="ci-workload-run",
+              results_fp="results/training_results.json",
+          )
+          PY
+
+      - name: Evaluate baseline workload
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          from financial_tweets_sentiment_analysis import evaluate
+
+          evaluate.evaluate_run(
+              run_id="ci-workload-run",
+              dataset_loc="datasets/processed/test/holdout_sample_1000.csv",
+              results_fp="results/evaluation_results.json",
+          )
+          PY
+
+      - name: Convert JSON results to markdown
+        run: |
+          python .github/workflows/json_to_md.py results/training_results.json results/training_results.md
+          python .github/workflows/json_to_md.py results/evaluation_results.json results/evaluation_results.md
+
+      - name: Upload workload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: workload-results
+          path: |
+            results/training_results.json
+            results/evaluation_results.json
+            results/training_results.md
+            results/evaluation_results.md
+
+      - name: Comment training results on PR
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          filePath: results/training_results.md
+
+      - name: Comment evaluation results on PR
+        if: github.event_name == 'pull_request'
+        uses: thollander/actions-comment-pull-request@v2
+        with:
+          filePath: results/evaluation_results.md
